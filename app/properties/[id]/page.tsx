@@ -1,3 +1,5 @@
+'use client'
+
 // Property details page. Fetches property from backend API when available,
 // falls back to local mock data.
 
