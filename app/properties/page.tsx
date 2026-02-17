@@ -6,102 +6,84 @@ import { propertiesAndHotels, Property } from '@/lib/data'
 import { getUserLocation, calculateDistance, Coordinates } from '@/lib/gpsService'
 import { getProperties } from '@/lib/api'
 
+type LocationStatus = 'idle' | 'success' | 'denied' | 'unavailable'
+
 export default function PropertiesPage() {
   const [items, setItems] = useState<(Property & { distance?: number })[]>([])
   const [userLocation, setUserLocation] = useState<Coordinates | null>(null)
   const [loading, setLoading] = useState(false)
-  const [showNearMe, setShowNearMe] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>('idle')
   const [filter, setFilter] = useState<'all' | 'property' | 'hotel' | 'land' | 'shortlet'>('all')
 
-  // Initialize with mock location (NYC center)
   useEffect(() => {
-    // Try to fetch from backend API; fall back to local mock data
     const load = async () => {
       try {
-        console.log('🔄 Fetching properties from backend API...')
         const resp = await getProperties()
         const mapped = resp.map((p: any) => ({
           ...p,
-          // API returns `distanceFromUser` when queried with coords
           distance: p.distanceFromUser ?? undefined,
         }))
         setItems(mapped)
-        console.log('✅ Backend API loaded', mapped.length, 'properties')
-      } catch (err) {
-        console.log('⚠️ Backend API failed, using local mock data:', err)
+      } catch {
         setItems(propertiesAndHotels)
       }
-      // Default to NYC coordinates for demo
-      setUserLocation({
-        latitude: 40.7128,
-        longitude: -74.006,
-      })
+      setUserLocation({ latitude: 40.7128, longitude: -74.006 })
     }
-
     load()
   }, [])
 
+  const sortByDistance = (location: Coordinates) => {
+    const withDistance = propertiesAndHotels.map((item) => ({
+      ...item,
+      distance: calculateDistance(location, item.location),
+    }))
+    withDistance.sort((a, b) => (a.distance || 0) - (b.distance || 0))
+    return withDistance
+  }
+
   const handleFindNearMe = async () => {
     setLoading(true)
-    setError(null)
+    setLocationStatus('idle')
 
     try {
       const location = await getUserLocation()
       setUserLocation(location)
-      setShowNearMe(true)
+      setLocationStatus('success')
 
-      // Ask backend for properties sorted by distance (if backend available)
       try {
         const resp = await getProperties(location.latitude, location.longitude)
         const mapped = resp.map((p: any) => ({ ...p, distance: p.distanceFromUser ?? undefined }))
         setItems(mapped)
-      } catch (err) {
-        // Fallback: calculate locally
-        const itemsWithDistance = propertiesAndHotels.map((item) => ({
-          ...item,
-          distance: calculateDistance(location, item.location),
-        }))
-        itemsWithDistance.sort((a, b) => (a.distance || 0) - (b.distance || 0))
-        setItems(itemsWithDistance)
+      } catch {
+        setItems(sortByDistance(location))
       }
     } catch (err: any) {
-      setError(
-        err.message || 'Could not get your location. Please enable GPS.'
-      )
-      // Fallback: show all items with pre-calculated distances
-      const defaultLocation: Coordinates = {
-        latitude: 40.7128,
-        longitude: -74.006,
-      }
-      const itemsWithDistance = propertiesAndHotels.map((item) => ({
-        ...item,
-        distance: calculateDistance(defaultLocation, item.location),
-      }))
-      itemsWithDistance.sort((a, b) => (a.distance || 0) - (b.distance || 0))
-      setItems(itemsWithDistance)
+      const isDenied = err.message?.toLowerCase().includes('denied')
+      setLocationStatus(isDenied ? 'denied' : 'unavailable')
+
+      const defaultLocation: Coordinates = { latitude: 40.7128, longitude: -74.006 }
+      setItems(sortByDistance(defaultLocation))
     } finally {
       setLoading(false)
     }
   }
 
   const handleGetDirections = (item: Property) => {
-    const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${item.location.lat},${item.location.lng}&destination_place_id=${encodeURIComponent(item.title)}`
-    window.open(mapsUrl, '_blank')
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${item.location.lat},${item.location.lng}&destination_place_id=${encodeURIComponent(item.title)}`
+    window.open(url, '_blank')
   }
 
   const filteredItems = useMemo(() => {
-    return items.filter((item) => {
-      if (filter === 'all') return true
-      return item.type === filter
-    })
+    if (filter === 'all') return items
+    return items.filter((item) => item.type === filter)
   }, [items, filter])
+
+  const countByType = (type: string) => items.filter((i) => i.type === type).length
 
   return (
     <main>
       <section className="py-16 bg-gradient-to-b from-gray-50 to-white">
         <div className="container mx-auto px-4">
-          {/* Header */}
           <div className="mb-8">
             <h1 className="text-4xl md:text-5xl font-bold mb-2">
               🏠 Properties & 🏨 Hotels Near You
@@ -110,8 +92,7 @@ export default function PropertiesPage() {
               Find the perfect property or hotel at the best locations
             </p>
 
-            {/* Action Buttons */}
-            <div className="flex flex-col md:flex-row gap-4 mb-6">
+            <div className="flex flex-col md:flex-row gap-4 mb-6 items-start">
               <button
                 onClick={handleFindNearMe}
                 disabled={loading}
@@ -120,60 +101,52 @@ export default function PropertiesPage() {
                 {loading ? '🔍 Finding...' : '📍 Find Near Me'}
               </button>
 
-              {userLocation && showNearMe && (
-                <div className="bg-blue-100 border border-blue-400 text-blue-800 px-4 py-2 rounded-lg">
-                  ✓ Showing results near your location
+              {locationStatus === 'success' && (
+                <div className="bg-green-50 border border-green-300 text-green-800 px-4 py-2 rounded-lg flex items-center gap-2 self-center">
+                  ✓ Showing results sorted by your location
                 </div>
               )}
 
-            {error && (
-              <div className="bg-red-100 border border-red-400 text-red-800 px-4 py-3 rounded-lg">
-                <p className="font-semibold mb-2">⚠️ {error}</p>
-                {error.includes('permission denied') || error.includes('Location permission') ? (
-                  <p className="text-sm">
-                    <strong>Fix:</strong> Click the location icon 📍 in your browser's address bar (or padlock icon) → "Site settings" → "Location" → Set to "Allow"
+              {locationStatus === 'denied' && (
+                <div className="bg-amber-50 border border-amber-300 text-amber-800 px-4 py-3 rounded-lg max-w-sm">
+                  <p className="font-semibold">📍 Location access not available</p>
+                  <p className="text-sm mt-1">
+                    Showing results sorted by distance from New York instead. To use your exact location, allow location access in your browser and try again.
                   </p>
-                ) : null}
-              </div>
-            )}
+                </div>
+              )}
+
+              {locationStatus === 'unavailable' && (
+                <div className="bg-amber-50 border border-amber-300 text-amber-800 px-4 py-3 rounded-lg max-w-sm">
+                  <p className="font-semibold">📡 Couldn't detect your location</p>
+                  <p className="text-sm mt-1">Showing all results instead. Try again or check your device's GPS settings.</p>
+                </div>
+              )}
             </div>
 
-            {/* Filter Tabs */}
             <div className="flex gap-2 flex-wrap">
-              <button
-                onClick={() => setFilter('all')}
-                className={`px-4 py-2 rounded-lg font-semibold transition ${
-                  filter === 'all'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                All ({filteredItems.length})
-              </button>
-              <button
-                onClick={() => setFilter('property')}
-                className={`px-4 py-2 rounded-lg font-semibold transition ${
-                  filter === 'property'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                🏠 Properties ({items.filter((i) => i.type === 'property').length})
-              </button>
-              <button
-                onClick={() => setFilter('hotel')}
-                className={`px-4 py-2 rounded-lg font-semibold transition ${
-                  filter === 'hotel'
-                    ? 'bg-purple-600 text-white'
-                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                }`}
-              >
-                🏨 Hotels ({items.filter((i) => i.type === 'hotel').length})
-              </button>
+              {([
+                { value: 'all', label: `All (${items.length})` },
+                { value: 'property', label: `🏠 Properties (${countByType('property')})` },
+                { value: 'hotel', label: `🏨 Hotels (${countByType('hotel')})` },
+                { value: 'shortlet', label: `🏠 Shortlets (${countByType('shortlet')})` },
+                { value: 'land', label: `🏞️ Land (${countByType('land')})` },
+              ] as const).map(({ value, label }) => (
+                <button
+                  key={value}
+                  onClick={() => setFilter(value)}
+                  className={`px-4 py-2 rounded-lg font-semibold transition ${
+                    filter === value
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* Grid */}
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredItems.map((item) => (
               <PropertyCard
@@ -193,7 +166,7 @@ export default function PropertiesPage() {
           {filteredItems.length === 0 && (
             <div className="text-center py-12">
               <p className="text-gray-500 text-lg">
-                No {filter === 'all' ? 'items' : filter} found.
+                No {filter === 'all' ? 'items' : filter}s found.
               </p>
             </div>
           )}
